@@ -1,7 +1,6 @@
 import pygame
 import numpy as np
 
-class AvatarRenderer:
     def __init__(self, screen_width, screen_height):
         self.width = screen_width
         self.height = screen_height
@@ -11,16 +10,14 @@ class AvatarRenderer:
         self.P2_COLOR = (255, 0, 0)   # Red
         self.BONE_COLOR = (255, 255, 255)
         
-        # Connections to draw (MediaPipe indices)
-        self.CONNECTIONS = [
-            (11, 13), (13, 15), # Left Arm
-            (12, 14), (14, 16), # Right Arm
-            (11, 12),           # Shoulders
-            (11, 23), (12, 24), # Torso
-            (23, 24),           # Hips
-            (23, 25), (25, 27), # Left Leg
-            (24, 26), (26, 28)  # Right Leg
-        ]
+        # Load Sprites
+        from src.game.sprites import SpriteManager
+        self.sprite_manager = SpriteManager()
+        # We need to initialize pygame display before loading images usually, 
+        # but class instantiation might happen before.
+        # Safe to call load later or assume display exists if created in GameEngine.
+        
+        self.sprites_loaded = False
 
     def draw_bg(self, surface):
         # Draw a retro grid floor
@@ -95,44 +92,72 @@ class AvatarRenderer:
         surface.blit(restart, (self.width//2 - restart.get_width()//2, self.height//2 + 50))
 
     def draw_avatar(self, surface, landmarks, player_id=1, offset_x=0):
-        """
-        Draws a stickman from landmarks.
-        landmarks: MediaPipe normalized landmarks (0.0-1.0)
-        offset_x: Pixel shift to place P1 left/P2 right
-        """
+        if not self.sprites_loaded:
+             self.sprite_manager.load_sprites()
+             self.sprites_loaded = True
+             
         if not landmarks:
             return
 
         points = {}
-        
-        # 1. Convert normalized landmarks to screen coordinates
+        # Convert landmarks to screen space
         for idx, lm in enumerate(landmarks.landmark):
-            # We focus on the upper body/main joints (0-32)
-            # x is 0-1, y is 0-1
-            
-            # Flip X for mirroring effect if needed
-            x = lm.x
-            y = lm.y
-            
-            # Simple projection
-            px = int(x * 300) + offset_x # Scale width to 300px avatar space
-            py = int(y * 400) + 100      # Scale height
-            
+            # Scale
+            px = int(lm.x * 300) + offset_x
+            py = int(lm.y * 400) + 100
             points[idx] = (px, py)
-            
-        color = self.P1_COLOR if player_id == 1 else self.P2_COLOR
-        
-        # 2. Draw Bones
-        for start, end in self.CONNECTIONS:
-            if start in points and end in points:
-                pygame.draw.line(surface, color, points[start], points[end], 3)
+
+        # Helper to draw sprite
+        def draw_part(part_name, idx_start, idx_end, scale=1.0):
+            if idx_start in points and idx_end in points:
+                mid_x = (points[idx_start][0] + points[idx_end][0]) // 2
+                mid_y = (points[idx_start][1] + points[idx_end][1]) // 2
                 
-        # 3. Draw Head (Approximate from nose/ears)
-        if 0 in points: # Nose
-            pygame.draw.circle(surface, self.BONE_COLOR, points[0], 10)
+                # Calculate angle
+                dx = points[idx_end][0] - points[idx_start][0]
+                dy = points[idx_end][1] - points[idx_start][1]
+                angle = -np.degrees(np.arctan2(dy, dx)) - 90 # Adjust for vertical sprites
+                
+                img = self.sprite_manager.get_rotated_part(player_id, part_name, angle)
+                if img:
+                    # Simple scaling based on assumption (sprites are 200px ish?). 
+                    # ideally we scale img to match length of limb.
+                    # For now just blit centered
+                    rect = img.get_rect(center=(mid_x, mid_y))
+                    surface.blit(img, rect)
+                    return True
+            return False
+
+        # Draw Limbs using Sprites
+        # Torso (Connect 11-12 to 23-24)
+        if 11 in points and 24 in points:
+             draw_part("torso", 11, 24) # Diagonal approx for center
+             
+        # Head (No angle, just position)
+        if 0 in points:
+            x, y = points[0]
+            img = self.sprite_manager.get_rotated_part(player_id, "head", 0)
+            if img:
+                rect = img.get_rect(center=(x, y))
+                surface.blit(img, rect)
             
-        # 4. Draw Hands (fists)
-        if 15 in points: # L Wrist
-             pygame.draw.circle(surface, (255, 255, 0), points[15], 8)
-        if 16 in points: # R Wrist
-             pygame.draw.circle(surface, (255, 255, 0), points[16], 8)
+        # Left Arm
+        draw_part("arm", 11, 13)
+        draw_part("arm", 13, 15)
+        
+        # Right Arm
+        draw_part("arm", 12, 14)
+        draw_part("arm", 14, 16)
+        
+        # Legs
+        draw_part("leg", 23, 25)
+        draw_part("leg", 25, 27)
+        
+        draw_part("leg", 24, 26)
+        draw_part("leg", 26, 28)
+        
+        # Fallback Wireframe (Low opacity) if sprites fail
+        # Or just draw keypoints for 'Hands'
+        color = self.P1_COLOR if player_id == 1 else self.P2_COLOR
+        if 15 in points: pygame.draw.circle(surface, color, points[15], 5)
+        if 16 in points: pygame.draw.circle(surface, color, points[16], 5)

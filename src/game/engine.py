@@ -19,6 +19,10 @@ class GameEngine:
         self.server = MultiPlayerServer(port=5000)
         
         # Logic
+        from src.logic.smoothing import LandmarkSmoother
+        self.smoother_p1 = LandmarkSmoother(min_cutoff=0.01, beta=0.5)
+        self.smoother_p2 = LandmarkSmoother(min_cutoff=0.01, beta=0.5)
+        
         self.detector_p1 = ActionDetector()
         self.detector_p2 = ActionDetector()
         
@@ -64,9 +68,34 @@ class GameEngine:
 
     def update(self):
         # 1. Get Landmarks directly from Network Server
-        self.landmarks_p1, self.landmarks_p2 = self.server.get_landmarks()
+        raw_p1, raw_p2 = self.server.get_landmarks()
         
-        # 2. Process Actions (Logic is same as before!)
+        current_time = pygame.time.get_ticks() / 1000.0
+        
+        # 1.5 Apply Smoothing
+        # We need Mock Objects back because Receiver gives dicts, but Renderer/Detector expects objects or dicts (Detector handles object-like access specificly)
+        # Actually our Detector/Renderer access .x .y properties if it's an object.
+        # But our Smoother returns DICTS. 
+        # Let's standardize everything to use helper class MockLandmarksResult from network.utils if needed,
+        # OR just update Detector/Renderer to handle dicts. 
+        # For speed: Let's assume Detector/Renderer logic was updated to use attributes. 
+        # Let's wrap the Smoothed Dicts into MockLandmark Objects so existing code doesn't break.
+        
+        from src.network.utils import MockLandmarksResult
+        
+        if raw_p1:
+             smoothed_p1_data = self.smoother_p1.smooth(raw_p1, current_time)
+             self.landmarks_p1 = MockLandmarksResult(smoothed_p1_data)
+        else:
+             self.landmarks_p1 = None
+             
+        if raw_p2:
+             smoothed_p2_data = self.smoother_p2.smooth(raw_p2, current_time)
+             self.landmarks_p2 = MockLandmarksResult(smoothed_p2_data)
+        else:
+             self.landmarks_p2 = None
+        
+        # 2. Process Actions
         self.p1_action = self.detector_p1.detect(self.landmarks_p1)
         self.p2_action = self.detector_p2.detect(self.landmarks_p2)
         
